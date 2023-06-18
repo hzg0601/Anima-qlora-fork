@@ -6,6 +6,10 @@ import copy
 import json
 import os
 from os.path import exists, join, isdir
+# 数据类可以被认为是“具有默认值的可变命名元组”提供了一个类装饰器，它使用 PEP 526“变量注释的语法”中定义的类型注释来检查变量的类定义。
+#  在本文档中，此类变量称为字段。 使用这些字段，装饰器将生成的方法定义添加到类中以支持
+# 实例初始化、repr、比较方法以及可选的其他方法，如规范部分中所述。 
+# 这样的类称为数据类，但该类实际上没有什么特别之处：装饰器将生成的方法添加到类中并返回给定的类。
 from dataclasses import dataclass, field
 import sys
 from typing import Optional, Dict, Sequence
@@ -149,6 +153,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default=True,
         metadata={"help": "Compress the quantization statistics through double quantization."}
     )
+    #? fp4和nf4是什么？-> float point 4, normal float 4
     quant_type: str = field(
         default="nf4",
         metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."}
@@ -173,6 +178,11 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default=80000,
         metadata={"help": "Free memory per gpu."}
     )
+    # Wandb是Weights & Biases的缩写，是类似TensorBoard， visdom的一款可视化工具,是属于Python的，不是Pytorch的
+
+    # wandb是最大的特点是能自动上传云端，让你即使在外面或者旅行途中也能随时随地查看模型崩没崩。甚至觉得某个模型跑的不好了在手机上就可以停掉它。
+
+    # 但是wandb必须要联网，没网的本地电脑是没法跑的
     report_to: str = field(
         default='none',
         metadata={"help": "To use wandb or something else for reporting."}
@@ -183,7 +193,9 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step'})
     max_steps: int = field(default=10000, metadata={"help": 'How many optimizer update steps to take'})
     weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW'}) # use lora dropout instead for regularization if needed
-    learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate'})
+    learning_rate: float = field(default=0.0002, metadata={"help": 'The learning rate'})
+    #? 如何实现->
+
     remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
     gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
@@ -230,18 +242,22 @@ class GenerationArguments:
     length_penalty: Optional[float] = field(default=1.0)
     no_repeat_ngram_size: Optional[int] = field(default=0) 
 
+# 该函数表明，所有的量化层都使用了bnb.nn.Linear4bit或bnb.nn.Linear8bit
 def find_all_linear_names(args, model):
+    """找出所有线性量化层的层名，lm_head层除外"""
     cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
     lora_module_names = set()
     for name, module in model.named_modules():
         if isinstance(module, cls):
             names = name.split('.')
+            # 找出所有的量化层，只把模块的最后一个层级加到lora_modlue_names中
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
-
 
     if 'lm_head' in lora_module_names: # needed for 16-bit
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
+
+# 模型生成的callback类，针对样例数据和样例的prompt，生成样例的response.
 
 
 class SampleGenerateCallback(transformers.TrainerCallback):
@@ -275,7 +291,6 @@ class SampleGenerateCallback(transformers.TrainerCallback):
             logger.info(f"model not found in kwargs, skipping")
 
 
-
 class SavePeftModelCallback(transformers.TrainerCallback):
     def save_model(self, args, state, kwargs):
         logger.info('Saving PEFT checkpoint...')
@@ -298,21 +313,38 @@ class SavePeftModelCallback(transformers.TrainerCallback):
     def on_train_end(self, args, state, control, **kwargs):
         def touch(fname, times=None):
             with open(fname, 'a'):
+                # os.utime() 方法用于设置指定路径文件最后的修改和访问时间。在Unix,Windows中有效。
                 os.utime(fname, times)
 
         touch(join(args.output_dir, 'completed'))
         self.save_model(args, state, kwargs)
 
+# 使用accelerate库多卡部署模型
 def get_accelerate_model(args, checkpoint_dir):
 
     n_gpus = torch.cuda.device_count()
     max_memory = f'{args.max_memory_MB}MB'
     max_memory = {i: max_memory for i in range(n_gpus)}
-
+    # 如果执行full finetune，则保存位数必须是16或32位，即必须是float32,bf16,fp16
     if args.full_finetune: assert args.bits in [16, 32]
 
     logger.info(f'loading base model {args.model_name_or_path}...')
+    # 量化时更新梯度
     compute_dtype = (torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+    # kwargs可用于更新configuration对象（在加载后）并启动模型（例如，output_attentions=True）。 
+    # 根据是提供config还是自动加载而表现不同：
+    # 如果提供了config，**kwargs 将直接传递给底层模型的 __init__ 方法
+    # 如果未提供config，kwargs 将首先传递给Config类初始化函数（from_pretrained()）。
+    # 与config属性对应的 kwargs 的每个键将用于覆盖所述属性,不对应任何config属性的剩余键将传递给底层模型的 __init__ 函数。
+
+    # AutoModel.from_pretraind流程：
+    # 1. 先调用AutoConfig.from_pretrained等加载config, kwargs
+    # 2. 如果参数中存在auto_map参数，调用get_class_from_dynamic_module函数加载模型实例；
+    #    如果没有，则调用_get_model_class函数加载模型实例model_class；
+    # 3. 然后调用model_class.from_pretrained加载模型
+    # todo 用debug模式查看调用链
+
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         cache_dir=args.cache_dir,
@@ -320,6 +352,24 @@ def get_accelerate_model(args, checkpoint_dir):
         load_in_8bit=args.bits == 8,
         device_map='auto',
         max_memory=max_memory,
+        # BitsAngBytesConfig(load_in_8bit=False,llm_int8_threshold=6,llm_int8_skip_modules,
+        # llm_int8_enable_fp32_cpu_offload,**kwargs)
+
+        # llm_int8_threshold: float=6,对应于论文LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale
+        # 中离群值阈值。高于这个阈值的隐状态值会被视为离群值，在这些值上的参数会以fp16格式进行。
+        # 隐状态值通常是正态分布的，范围在[-35,3.5]之间，但有一些特殊的系统异常值，它们在大型模型中的分布非常不同。
+        # 这些异常值通常位于 [-60, -6] 或 [6, 60] 区间内。Int8 量化适用于值幅度约为 5，超过5的话，
+        # int8量化后的表现将极大下降。一个好的默认阈值是 6，但对于更不稳定的模型（小模型、微调），可能需要较低的阈值。
+
+        # llm_int8_skip_modules: 不进行int8量化的层列表，对于CausalLM类，lm_head通常会保持原始类型。
+        # 而某些模型如Jukebox，在不同的位置也有多个head，因此也不能进行量化。
+        
+        # llm_int8_enable_fp32_cpu_offload, 此标志用于了解此功能的高级用例和用户。 
+        # 如果你想将你的模型分成不同的部分并在 GPU 上以 int8 运行一些部分而在 CPU 上以 fp32 运行一些部分，
+        # 你可以使用这个标志。 这对于卸载大型模型（例如 `google/flan-t5-xxl`）很有用。 
+        # 请注意，int8 操作不会在 CPU 上运行。
+
+        # kwargs: 初始化configuration对象的其他参数。
         quantization_config=BitsAndBytesConfig(
             load_in_4bit=args.bits == 4,
             load_in_8bit=args.bits == 8,
@@ -332,7 +382,10 @@ def get_accelerate_model(args, checkpoint_dir):
         torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
         trust_remote_code=args.trust_remote_code,
     )
+    # 如果梯度计算的类型为torch.float16,量化位数为4，则检验设备的计算能力，如果计算上限是8，则设备支持bf16格式
+    # 提示用户可以启用--bf16参数
     if compute_dtype == torch.float16 and args.bits == 4:
+        # get_device_capability, 返回设备的计算能力，8以上支持bf16格式
         major, minor = torch.cuda.get_device_capability()
         if major >= 8:
             logger.info('='*80)
@@ -341,9 +394,11 @@ def get_accelerate_model(args, checkpoint_dir):
 
     setattr(model, 'model_parallel', True)
     setattr(model, 'is_parallelizable', True)
-
+    #? 重复了吧，AutoModelForCausalLM.from_pretrained已经设置了这个参数，且完全可以将之设为一个变量
+    #?为什么要升类型，混合精度计算里，更新梯度用torch.float32,而前向传播用torch.float16,是否与此有关
+    #? 若如此，则compute_dtype，就是指前向传播的数据类型
     model.config.torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
-
+    # 
     if not args.full_finetune:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
     if args.gradient_checkpointing:
@@ -351,9 +406,14 @@ def get_accelerate_model(args, checkpoint_dir):
 
     if not args.full_finetune:
         if checkpoint_dir is not None:
+            # 如果checkpoint_dir存在，则从adapter_model中加载adapter权重，返回一个PeftModel类
             logger.info("Loading adapters from checkpoint.")
+            # Instantiate a [`LoraModel`] from a pretrained Lora configuration and weights.
             model = PeftModel.from_pretrained(model, join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
+            # 如果checkpoint不存在，则找出所有线性量化层的层名，lm_head层除外
+            # 用LoraConfig实例化为LoraConfig类
+            # 再调用get_peft_model实例化一个PeftModel类
             logger.info(f'adding LoRA modules...')
             modules = find_all_linear_names(args, model)
             config = LoraConfig(
@@ -364,8 +424,15 @@ def get_accelerate_model(args, checkpoint_dir):
                 bias="none",
                 task_type="CAUSAL_LM",
             )
+            # Returns a Peft model object from a model and a config.
             model = get_peft_model(model, config)
-
+    # 对于模型的所有模块，如果模块是一个LoraLayer，且支持bf16类型，则将该层转换为bf16类型
+    # 如果模块是一个正则层，则模块的类型转换为float32位
+    # 如果模块是一个lm_head层或embed_tokens层，且支持bf16类型，则将该层转换为bf16类型
+    #* 因此可以看出，模型的基本类型为fp32或bf16,
+    #* 转换类型的方式是：如果支持bf16，则lora层，lm_head,embed_tokens层需要转换为bf16，否则保持为fp32
+    #* 这意味着，lora,lm_head,embed_tokens层需要的是更大的表示范围
+    #* 而norm层无论基本类型是fp32还是bf16，都需要转换为fp32，表明norm层需要更高的精度。
     for name, module in model.named_modules():
         if isinstance(module, LoraLayer):
             if args.bf16:
@@ -384,6 +451,7 @@ def print_trainable_parameters(args, model):
     """
     trainable_params = 0
     all_param = 0
+    # numel，返回数组中元素的个数
     for _, param in model.named_parameters():
         all_param += param.numel()
         if param.requires_grad:
@@ -395,6 +463,9 @@ def print_trainable_parameters(args, model):
         f"trainable: {100 * trainable_params / all_param}"
     )
 
+# tokenizer调用add_special_tokens将自定义的special_tokens_dict加入tokenizer，更新token词表
+# 然后模型调用resize_token_embeddings更新模型的词表长度
+# 计算旧embedding的均值，然后新加入的token的权重设为旧embedding的均值
 def smart_tokenizer_and_embedding_resize(
     special_tokens_dict: Dict,
     tokenizer: transformers.PreTrainedTokenizer,
@@ -416,7 +487,7 @@ def smart_tokenizer_and_embedding_resize(
 
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
+# 
 @dataclass
 class DataCollatorForCausalLM(object):
     tokenizer: transformers.PreTrainedTokenizer
