@@ -487,6 +487,7 @@ def smart_tokenizer_and_embedding_resize(
 
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
+# 数据处理类：__call__方法的输入为一个dict,包括两个键：input, output
 # 
 @dataclass
 class DataCollatorForCausalLM(object):
@@ -500,7 +501,17 @@ class DataCollatorForCausalLM(object):
         # Extract elements
         sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
         targets = [f"{example['output']}{self.tokenizer.eos_token}" for example in instances]
-        # Tokenize
+        # Tokenize，max_length和truncation配和设定token后序列的最大长度
+        # 也可设定truncation为longest_first,only_first，only_second,False'
+        # longest_first会逐个token进行截断，如果输入是一对句子，函数会从最长的句子中移除一个token
+        # only_first与longest_first基本一致，只是如果输入是一对句子，函数只会对第一个句子进行截断
+        # only_second,则是只对第二句子进行截断，
+        # False则不会进行截断，从而可能输出超出模型允许的最大长度的句子。
+        # truncated和padding的choices基本一致
+
+        # tokenizer的返回值为BatchEncoding类，它包含如下字段：
+        # input_ids,token_typed_ids,attention_mask,overflow_tokens,
+        # num_truncated_tokens,special_tokens_mask,length
         tokenized_sources_with_prompt = self.tokenizer(
             sources,
             max_length=self.source_max_len,
@@ -520,6 +531,7 @@ class DataCollatorForCausalLM(object):
             tokenized_sources_with_prompt['input_ids'], 
             tokenized_targets['input_ids']
         ):
+            # 
             if not self.predict_with_generate:
                 input_ids.append(torch.tensor(tokenized_source + tokenized_target))
                 if not self.train_on_source:
