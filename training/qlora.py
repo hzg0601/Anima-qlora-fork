@@ -1,6 +1,45 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+"""train函数的流程：
+1. 初始化各组命令行参数，将其组合为一个命名空间
+    1.1 调用 transformers.HfArgumentParser，将model,data,train,generate
+        的Arguments组合为一个命名空间
+    1.2 调用HfArgumentParser.parse_args_into_dataclasses
+        将命令行参数解析为指定数据类类型的实例
+    1.3 调用transformers.GenerationConfig将generate参数实例
+        转换为generation_config实例，并赋值给model.generation_config
+        命名空间
+    1.4 将model,data,train的参数实例组合为一个整的的命名空间
+2. 调用get_last_checkpoint检测是否完成训练，如未完成，返回checkpoint的路径
+3. 调用get_accelerate_model执行多卡部署，打印可训练参数
+    3.1 检测设备数量，最大显存，设定量化时梯度更新的数据类型compute_dtype
+    3.2 调用AutoModel类的from_pretrained方法加载模型
+        1. 其中device_map="auto",设定的torch基本数据为torch.float32或torch.bfloat16
+        2. 并额外设置了quantization_config字段，该字段的值是一个BitsAndBytesConfig类
+            该类中可设定load_in_8bit，llm_int8_threshold,
+            并额外添加了bnb_4bit_compute_type,bnb_4bit_use_double_quant,
+            bnb_4bit_quant_type等字段用于双重量化
+        3. 模型加载后设定model_parallel,is_parallelizale为True
+        4. 对于非full_finetune情况，调用prapare_model_for_kbit_training再次
+            初始化模型
+        5. 按模型配置，启动gradient_checkpointing_enable
+        6. 若checkpint_dir路径下没有adapter路径，调用PeftModel.from_pretrained模型，
+            加载lora权重，合并权重，更新模型；如果没有adapter路径，调用LoraConfig配置
+            lora的config,而后基于config和原生模型调用get_peft_model初始化peft模型
+        7. 最后将模型的lora,lm_head,embed_tokens层转换为bf16或fp32,
+            将norm层转换为fp32.
+4. 设置tokenizer.
+    4.1 AutoTokenizer.from_pretrained方法实例化tokenizer,
+    4.2 调用smart_tokenizer_and_embedding_resize模型的词表长度和新加入的token的权重
+    4.3 对于llama类模型，加入eos_token,bos_token,unk_token.
+5. 实例化组装数据类，加载数据，分割数据,返回一个包括：
+    train_dataset,eval_dataset,predict_dataset,datacollator的字典。
+    5.1 
 
+
+
+
+"""
 from collections import defaultdict
 import copy
 import json
@@ -258,8 +297,6 @@ def find_all_linear_names(args, model):
     return list(lora_module_names)
 
 # 模型生成的callback类，针对样例数据和样例的prompt，生成样例的response.
-
-
 class SampleGenerateCallback(transformers.TrainerCallback):
     "A callback that prints a sample generations of the model in the process of training"
 
@@ -487,8 +524,14 @@ def smart_tokenizer_and_embedding_resize(
 
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
-# 数据处理类：__call__方法的输入为一个dict,包括两个键：input, output
-# 
+# 数据处理类：__call__方法的输入为一个dict的序列,dict包括两个键：input, output
+# 1. 取出输入instances的input和output作为sources和targets
+# 2. 执行tokenize操作，并执行truncation操作，保证输出的tokenize不超过max_len
+# 3. 组装数据
+#    如果不是predict_with_generate，就只以source为输入，且不设labels
+#    如果是predict_with_generate,则以source+target为输入，
+#       如果执行train_on_source,则以source+target为label,
+#       如果不执行train_on_source,则以source掩码+target为label.
 @dataclass
 class DataCollatorForCausalLM(object):
     tokenizer: transformers.PreTrainedTokenizer
@@ -531,7 +574,10 @@ class DataCollatorForCausalLM(object):
             tokenized_sources_with_prompt['input_ids'], 
             tokenized_targets['input_ids']
         ):
-            # 
+            # 如果不执行predict_with_generate,则将输入输出拼接作为一条输入
+            #   如果不执行train_on_source,则将输入掩码，以掩码和输出作为一条label
+            #   否则，就把输入和输出拼接作为一条label
+            # 如果执行predict_with_generate,则只将输入作为一条输入
             if not self.predict_with_generate:
                 input_ids.append(torch.tensor(tokenized_source + tokenized_target))
                 if not self.train_on_source:
@@ -543,8 +589,11 @@ class DataCollatorForCausalLM(object):
             else:
                 input_ids.append(torch.tensor(tokenized_source))
         # Apply padding
+        # batch_first=True,则输出以B*T(最长句子的长度)的形式，否则以T*B的形式
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+        # 如果不执行predict_with_generate,则没有labels
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
+        # ne=not_equal,
         data_dict = {
             'input_ids': input_ids,
             'attention_mask':input_ids.ne(self.tokenizer.pad_token_id),
@@ -552,16 +601,24 @@ class DataCollatorForCausalLM(object):
         if labels is not None:
             data_dict['labels'] = labels
         return data_dict
-
+# 将examples中instances字段，reformulations字段的每个样本组装到out的input,output字段中
 def extract_unnatural_instructions_data(examples, extract_reformulations=False):
+    """
+    examples: Dict[str,Sequence[Dict[str,str]]]
+    """
     out = {
-        'input': [],
+        'input': [], 
         'output': [],
     }
+    # examples:DataCollatorForCausalLM输入的容器
     for example_instances in examples['instances']:
         for instance in example_instances:
+            # out['input']相当于prompt,out['output']相当于label
             out['input'].append(instance['instruction_with_input'])
             out['output'].append(instance['output'])
+    # 如果数据还进行了reformulation,则examples还会有reformulations字段
+    # 对于每个reformulation字段下的example_reformulations，只有它不为None
+    # 则将它的prompt添加入out['input']中，将它的输出添加入out['output']中
     if extract_reformulations:
         for example_reformulations in examples['reformulations']:
             if example_reformulations is not None:
@@ -569,7 +626,7 @@ def extract_unnatural_instructions_data(examples, extract_reformulations=False):
                     out['input'].append(instance['instruction_with_input'])
                     out['output'].append(instance['output'])
     return out
-
+# alpaca的prompt模板，一种没有输入，一种有输入
 ALPACA_PROMPT_DICT = {
     "prompt_input": (
         "Below is an instruction that describes a task, paired with an input that provides further context. "
@@ -582,14 +639,18 @@ ALPACA_PROMPT_DICT = {
         "### Instruction:\n{instruction}\n\n### Response: "
     ),
 }
-
+# 如果样例有输入，则使用prompt_input模板构造输入的prompt，
+# 否则使用prompt_no_input构造输入的prompt
 def extract_alpaca_dataset(example):
+    """
+    example:Dict[str,str]
+    """
     if example.get("input", "") != "":
         prompt_format = ALPACA_PROMPT_DICT["prompt_input"]
     else:
         prompt_format = ALPACA_PROMPT_DICT["prompt_no_input"]
     return {'input': prompt_format.format(**example)}
-
+# 加载并分割数据
 def local_dataset(dataset_name):
     if dataset_name.endswith('.json'):
         full_dataset = Dataset.from_json(path_or_paths=dataset_name)
@@ -660,17 +721,22 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
                 raise NotImplementedError(f"Dataset {dataset_name} not implemented yet.")
 
     def format_dataset(dataset, dataset_format):
+        # alpaca类数据集的格式应类似一个dataframe,包括input,instruction两个字段
         if (
             dataset_format == 'alpaca' or dataset_format == 'alpaca-clean' or 
             (dataset_format is None and args.dataset in ['alpaca', 'alpaca-clean'])
         ):
+            # 输出的是以input为key,prompt为字段的字典，故format_dataset的输出也是如此
             dataset = dataset.map(extract_alpaca_dataset, remove_columns=['instruction'])
         elif dataset_format == 'chip2' or (dataset_format is None and args.dataset == 'chip2'):
+            # chip2的格式类似一个Series,每个元素都是一个字典，字典有text字段
+            # text字段值的格式为"$input:\n<bot> :<human> :\n<bot> :$output""
             dataset = dataset.map(lambda x: {
                 'input': x['text'].split('\n<bot>: ')[0].replace('<human>: ', ''),
                 'output': x['text'].split('\n<bot>: ')[1],
             })
         elif dataset_format == 'self-instruct' or (dataset_format is None and args.dataset == 'self-instruct'):
+            # self-instruct数据集的格式为
             for old, new in [["prompt", "input"], ["completion", "output"]]:
                 dataset = dataset.rename_column(old, new)
         elif dataset_format == 'hh-rlhf' or (dataset_format is None and args.dataset == 'hh-rlhf'):
@@ -691,6 +757,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         
      # Load dataset.
     dataset = load_data(args.dataset)
+    # 在debug模式下，训练只使用前200条数据
     if args.debug_mode:
         dataset['train'] = dataset['train'].filter(lambda x,i: i < 200, with_indices=True)
         #dataset['eval'] = dataset['eval'].filter(lambda x,i: i < 200, with_indices=True)
@@ -708,6 +775,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             eval_dataset = dataset['test']
         if args.max_eval_samples is not None and len(eval_dataset) > args.max_eval_samples:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
+        # 如果存在group_by_length字典，则计算每个样本输入输出长度之和，计入length字段下
         if args.group_by_length:
             eval_dataset = eval_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
     if args.do_train:
@@ -716,7 +784,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             train_dataset = train_dataset.select(range(args.max_train_samples))
         if args.group_by_length:
             train_dataset = train_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
-
+    # 组装数据类的实例化
     data_collator = DataCollatorForCausalLM(
         tokenizer=tokenizer, 
         source_max_len=args.source_max_len,
@@ -730,12 +798,17 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         predict_dataset=eval_dataset if args.do_predict else None,
         data_collator=data_collator
     )
-
+# 检查训练是否完成，如未完成返回最新一步的检查点路径和未完成训练的flag值
 def get_last_checkpoint(checkpoint_dir):
     if isdir(checkpoint_dir):
+        # 如果存在checkpoint_dir下的complete文件路径，则表明训练完成，返回None,True；否则返回None,False
+
         is_completed = exists(join(checkpoint_dir, 'completed'))
         if is_completed: return None, True # already finished
         max_step = 0
+        # 如果不存在checkpoint_dir路径，则表面训练未完成，遍历checkpoint_dir，
+        # 找出最新一步，如果最新一步为0，表明刚刚开始训练，返回None,False
+        # 如果最新一步不为0，则返回最新一步的文件路径和False.
         for filename in os.listdir(checkpoint_dir):
             if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint'):
                 max_step = max(max_step, int(filename.replace('checkpoint-', '')))
@@ -746,22 +819,31 @@ def get_last_checkpoint(checkpoint_dir):
     return None, False # first training
 
 def train():
+    # HfArgumentParser是ArgumentParser的一个子类，它使用dataclasses的类型提示来生成arguments
+    # 该类需要与原生argparse一起使用，允许在parser在初始化以后增加（非dataclass支持）arguments,
+    # 在parsing后，该类将作为一个额外的命名空间返回
     hfparser = transformers.HfArgumentParser((
         ModelArguments, DataArguments, TrainingArguments, GenerationArguments
     ))
+    # 将命令行参数解析为指定数据类类型的实例。 这依赖于 argparse 的“ArgumentParser.parse_known_args”。
+    # parse_args_into_dataclasses(self,args=None,return_remaining_strings=False,look_for_args_file=True,
+    #    args_filename=None,args_file_flag=None)
+    # return_remaining_strings:如果为真，还返回剩余参数字符串的列表。
     model_args, data_args, training_args, generation_args, extra_args = \
         hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
+    # 将generation_args作为training_args的generation_config字段
     training_args.generation_config = transformers.GenerationConfig(**vars(generation_args))
+    # 将所有args组装作为一个完整的args
     args = argparse.Namespace(
         **vars(model_args), **vars(data_args), **vars(training_args)
     )
 
     logger.info(f"args: {args}")
-
+    # 检测是否完成训练
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
     if completed_training:
         logger.info('Detected that training was already completed!')
-
+    # 多卡部署model
     model = get_accelerate_model(args, checkpoint_dir)
 
     model.config.use_cache = False
@@ -777,12 +859,17 @@ def train():
         use_fast=False, # Fast tokenizer giving issues.
         tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
     )
+    # 如果tokenizer存在_pad_token,则调用smart_tokenizer_and_embedding_resize，其逻辑为：
+    # tokenizer调用add_special_tokens将自定义的special_tokens_dict加入tokenizer，更新token词表
+    # 然后模型调用resize_token_embeddings更新模型的词表长度
+    # 计算旧embedding的均值，然后新加入的token的权重设为旧embedding的均值
     if tokenizer._pad_token is None:
         smart_tokenizer_and_embedding_resize(
             special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
             tokenizer=tokenizer,
             model=model,
         )
+    # 对于llama模型，需要增加eos_token,bos_token,unk_token
     if 'llama' in args.model_name_or_path or isinstance(tokenizer, LlamaTokenizer):
         # LLaMA tokenizer may not have correct special tokens set.
         # Check and add them if missing to prevent them from being parsed into different tokens.
@@ -796,7 +883,10 @@ def train():
                     model.config.pad_token_id if model.config.pad_token_id != -1 else tokenizer.pad_token_id
                 ),
         })
+    # 实例化组装数据类，加载数据，分割数据，
+    # 返回一个包括train_dataset,eval_dataset,predict_dataset,datacollator的字典
     data_module = make_data_module(tokenizer=tokenizer, args=args)
+    # 实例化，Seq2SeqTrainer类进行训练，Seq2SeqTrainer类是Trainer的子类
     trainer = Seq2SeqTrainer(
         model=model, 
         tokenizer=tokenizer,
@@ -805,11 +895,15 @@ def train():
     )
 
     # Callbacks
+    # 增加callback类
     if not args.full_finetune:
         trainer.add_callback(SavePeftModelCallback)
     if args.sample_generate:
         trainer.add_callback(SampleGenerateCallback)
+    # 如果执行mmlu_eval，则加载对应的数据，分割数据，实例化评估准则，
+    # 定义MMLUEvalCallback类，并加入trainer的callback类中
     if args.do_mmlu_eval:
+        # zs->zeroshot
         if args.mmlu_dataset == 'mmlu-zs':
             mmlu_dataset = load_dataset("json", data_files={
                 'eval': 'data/mmlu/zero_shot_mmlu_val.json',
@@ -873,6 +967,7 @@ def train():
         trainer.add_callback(MMLUEvalCallback)
 
     # Verifying the datatypes.
+    # 统计每个数据类型下的参数的个数和比例
     dtypes = {}
     for _, p in model.named_parameters():
         dtype = p.dtype
@@ -882,7 +977,7 @@ def train():
     for k, v in dtypes.items(): total+= v
     for k, v in dtypes.items():
         logger.info(k, v, v/total)
-
+    #? all_metrics 记录metric的字典
     all_metrics = {"run_name": args.run_name}
     # Training
     if args.do_train:
@@ -908,10 +1003,13 @@ def train():
         prediction_output = trainer.predict(test_dataset=data_module['predict_dataset'],metric_key_prefix="predict")
         prediction_metrics = prediction_output.metrics
         predictions = prediction_output.predictions
+        # prediction的output中pad_token_id的预测值为-100
         predictions = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
+        # 转换为token_id对应的str
         predictions = tokenizer.batch_decode(
             predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
+        # 将预测的输出、输出+输入写入文件，记录预测的metric
         with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
             for i, example in enumerate(data_module['predict_dataset']):
                 example['prediction_with_input'] = predictions[i].strip()
@@ -921,7 +1019,7 @@ def train():
         trainer.log_metrics("predict", prediction_metrics)
         trainer.save_metrics("predict", prediction_metrics)
         all_metrics.update(prediction_metrics)
-
+    # 将最终的metric写入文件
     if (args.do_train or args.do_eval or args.do_predict):
         with open(os.path.join(args.output_dir, "metrics.json"), "w") as fout:
             fout.write(json.dumps(all_metrics))
