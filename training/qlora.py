@@ -11,7 +11,7 @@
         命名空间
     1.4 将model,data,train的参数实例组合为一个整的的命名空间
 2. 调用get_last_checkpoint检测是否完成训练，如未完成，返回checkpoint的路径
-3. 调用get_accelerate_model执行多卡部署，打印可训练参数
+3. 调用get_accelerate_model执行多卡部署，调用print_trainable_parameters打印可训练参数
     3.1 检测设备数量，最大显存，设定量化时梯度更新的数据类型compute_dtype
     3.2 调用AutoModel类的from_pretrained方法加载模型
         1. 其中device_map="auto",设定的torch基本数据为torch.float32或torch.bfloat16
@@ -19,24 +19,78 @@
             该类中可设定load_in_8bit，llm_int8_threshold,
             并额外添加了bnb_4bit_compute_type,bnb_4bit_use_double_quant,
             bnb_4bit_quant_type等字段用于双重量化
-        3. 模型加载后设定model_parallel,is_parallelizale为True
+        3. 模型加载后设定model_parallel,is_parallelizable为True
         4. 对于非full_finetune情况，调用prapare_model_for_kbit_training再次
             初始化模型
         5. 按模型配置，启动gradient_checkpointing_enable
         6. 若checkpint_dir路径下没有adapter路径，调用PeftModel.from_pretrained模型，
-            加载lora权重，合并权重，更新模型；如果没有adapter路径，调用LoraConfig配置
-            lora的config,而后基于config和原生模型调用get_peft_model初始化peft模型
+            加载lora权重，合并权重，更新模型；如果没有adapter路径，则调用find_all_linear_names
+            找出除lm_head外的所有线性层，调用LoraConfig配置lora的config,配置对象为上述线性层，
+            而后基于config和原生模型调用get_peft_model初始化peft模型
         7. 最后将模型的lora,lm_head,embed_tokens层转换为bf16或fp32,
             将norm层转换为fp32.
 4. 设置tokenizer.
     4.1 AutoTokenizer.from_pretrained方法实例化tokenizer,
     4.2 调用smart_tokenizer_and_embedding_resize模型的词表长度和新加入的token的权重
     4.3 对于llama类模型，加入eos_token,bos_token,unk_token.
-5. 实例化组装数据类，加载数据，分割数据,返回一个包括：
+5. 调用组装数据函数make_data_module，加载数据，分割数据,返回一个包括：
     train_dataset,eval_dataset,predict_dataset,datacollator的字典。
-    5.1 
+    5.1 定义数据加载函数load_data,用于读取不同的数据集，如果是本地数据，
+        则调用local_dataset读取指定格式的数据，读取数据类为dataset的Dataset类，
+        支持.json,.jsonl,.csv,.tsv,读取后直接调用Dataset类的train_test_split
+        进行数据分割。
+    5.2 定义数据格式函数format_dataset，将不同来源的数据(由dataset_format字段标识)
+        统一为具有input,output字段的字典
+        1. 如果是alpaca类数据，直接调用extract_alpaca_dataset函数进行处理，该函数
+            提供了一个模板将数据自带的instruction,input统一为alpaca的prompt作为输入。
+        2. 如果是chip2类数据，则数据text字段值的格式为
+            "$input:\n<bot> :<human> :\n<bot> :$output""，将数据抽取写入input,output
+            对应字段即可。
+        3. 如果是self-instruct类数据，则仅需进行字段重命名即可。
+        4. 如果是hh-rlhf类数据，则input字段为'',output为样例的chosen字段
+        5. 如果是oasst1类数据，则input字段为'',output为样例的text字段
+        6. 处理完毕后，将dataset中的其他字段删除。
+    5.3 调用load_data函数加载数据，如果是在debug模式下，训练只使用前200条数据
+    5.4 调用format_dataset函数，处理数据格式
+    5.5 如果是执行eval或predict任务，但数据集没有eval字段，对train数据集进行分割
+        生成eval数据集。若执行train任务，取出数据即可。
+    5.6 若规定了max_eval_samples字段，则只取规定数量的样本进行评测，
+        如果存在group_by_length字段，则计算每个样本输入输出长度之和，计入length字段下。
 
-
+    5.7 实例化组装数据类DataCollatorForCausalLM，该类拥有如下属性：
+        tokenizer: transformers.PreTrainedTokenizer
+        source_max_len: int
+        target_max_len: int
+        train_on_source: bool
+        predict_with_generate: bool
+        定义的__call__方法的流程如下：
+        1. 将输入的instances: Sequence[Dict]的input,output分别取出作为sources,targets;
+        2. 调用实例化的tokenizer对输入的sources,targets进行tokenize;
+        3. 如果不执行predict_with_generate,则将输入输出拼接作为一条输入
+            如果不执行train_on_source,则将输入掩码，以掩码和输出作为一条label,
+            否则，就把输入和输出拼接作为一条label
+          如果执行predict_with_generate,则只将输入作为一条输入;
+          得到input_ids和labels列表。
+        4. 对input_ids和labels进行padding,输出以B*T(最长句子的长度)的形式。
+        5. 基于tokenizer.pad_token_id对input_ids进行掩码得到attention_mask,
+            将input_ids,attention_mask,labels作为字段返回一个字典。
+6. 实例化Seq2SeqTrainer类进行训练，Seq2SeqTrainer类是Trainer的子类，
+   该类的参数包括model,tokenizer,args(training_args),**kwargs.
+7. 对于非full_finetune任务，向Seq2SeqTrainer实例增加callback类SavePeftModelCallback
+    该类是transformers.TrainerCallback的子类，定义了save_model,on_save,on_train_end
+    等方法，用于保存peft模型的权重，更新文件处理时间，生成completed文件夹。
+8. 对于sample_generate任务，向Seq2SeqTrainer实例增加callback类SampleGenerateCallback，
+    该类是transformers.TrainerCallback的子类，定义了on_evaluate方法，对给定的
+    样本问题进行生成式回答。
+9. 如果执行mmlu_eval，则加载对应的数据，分割数据，实例化评估准则，定义MMLUEvalCallback类，
+    并加入trainer的callback类中，支持的数据包括mmlu/zero-shot,mmlu/five-shot两类数据
+    ?定义abcd_idx列表对，A,B,C,D进行tokenize.
+    1. MMLUEvalCallback
+10.  统计每个数据类型下的参数的个数和比例
+11. 对train/eval/predict任务，调用trainer对应的train/evaluate/predict方法，
+    记录并更新train/evaluate/predict的表现，对于predict任务，还需要将输出decode,
+    将预测的输出、输出+输入写入文件
+12. 将最终的metrics写入本地文件。
 
 
 """
@@ -233,8 +287,6 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     max_steps: int = field(default=10000, metadata={"help": 'How many optimizer update steps to take'})
     weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW'}) # use lora dropout instead for regularization if needed
     learning_rate: float = field(default=0.0002, metadata={"help": 'The learning rate'})
-    #? 如何实现->
-
     remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
     gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
@@ -448,8 +500,9 @@ def get_accelerate_model(args, checkpoint_dir):
             # Instantiate a [`LoraModel`] from a pretrained Lora configuration and weights.
             model = PeftModel.from_pretrained(model, join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
-            # 如果checkpoint不存在，则找出所有线性量化层的层名，lm_head层除外
-            # 用LoraConfig实例化为LoraConfig类
+            # 如果checkpoint不存在，则调用find_all_linear_names
+            # 找出所有线性量化层的层名，lm_head层除外
+            # 用LoraConfig实例化为LoraConfig类，module对象为lm_head外所有线性层
             # 再调用get_peft_model实例化一个PeftModel类
             logger.info(f'adding LoRA modules...')
             modules = find_all_linear_names(args, model)
@@ -775,7 +828,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             eval_dataset = dataset['test']
         if args.max_eval_samples is not None and len(eval_dataset) > args.max_eval_samples:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
-        # 如果存在group_by_length字典，则计算每个样本输入输出长度之和，计入length字段下
+        # 如果存在group_by_length字段，则计算每个样本输入输出长度之和，计入length字段下
         if args.group_by_length:
             eval_dataset = eval_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
     if args.do_train:
@@ -886,7 +939,7 @@ def train():
     # 实例化组装数据类，加载数据，分割数据，
     # 返回一个包括train_dataset,eval_dataset,predict_dataset,datacollator的字典
     data_module = make_data_module(tokenizer=tokenizer, args=args)
-    # 实例化，Seq2SeqTrainer类进行训练，Seq2SeqTrainer类是Trainer的子类
+    # 实例化Seq2SeqTrainer类进行训练，Seq2SeqTrainer类是Trainer的子类
     trainer = Seq2SeqTrainer(
         model=model, 
         tokenizer=tokenizer,
