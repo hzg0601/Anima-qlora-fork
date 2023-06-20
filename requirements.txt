@@ -1,7 +1,7 @@
-bitsandbytes==0.39.0
-transformers @ git+https://github.com/huggingface/transformers.git
-peft @ git+https://github.com/huggingface/peft.git
-accelerate @ git+https://github.com/huggingface/accelerate.git
+bitsandbytes==0.39.0 #可能需要从源码编译，参考bitsandbytes的指引，https://github.com/TimDettmers/bitsandbytes
+transformers @ git+https://github.com/huggingface/transformers.git # 4.30.0.dev0以上，否则transformers.HfArgumentParser会报错paged_adam2_32bit is not supported. 
+peft @ git+https://github.com/huggingface/peft.git # peft-0.4.0.dev0以上,否则会报找不到prepare_model_for_kbit
+accelerate @ git+https://github.com/huggingface/accelerate.git # 0.20.0.dev0以上，否则会报xception has occurred: ImportError accelerate>=0.20.3 is required for a normal functioning of this module
 einops==0.6.1
 evaluate==0.4.0
 scikit-learn==1.2.2

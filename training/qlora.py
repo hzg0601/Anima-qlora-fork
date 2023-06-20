@@ -210,7 +210,7 @@ class DataArguments:
         default=None,
         metadata={"help": "Which dataset format is used. [alpaca|chip2|self-instruct|hh-rlhf]"}
     )
-
+# bf16是transformers.Seq2SeqTrainingArguments的方法
 @dataclass
 class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     cache_dir: Optional[str] = field(
@@ -260,7 +260,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     bits: int = field(
         default=4,
         metadata={"help": "How many bits to use."}
-    )
+    ) 
     lora_r: int = field(
         default=64,
         metadata={"help": "Lora R dimension."}
