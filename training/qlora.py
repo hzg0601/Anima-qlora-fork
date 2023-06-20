@@ -109,6 +109,12 @@ from typing import Optional, Dict, Sequence
 import numpy as np
 from tqdm import tqdm
 import logging
+# bitandbytes raise RuntimeError: CUDA Setup failed despite GPU being available.
+# 需要根据初始打印信息中CUDA SETUP: CUDA runtime path found: /home/huangzhiguo/anaconda3/lib/libcudart.so
+# 找到其指向的CUDA version，若指向的不是目标cuda version
+# 则修改libcudart.so软链接指向的libcudart.so版本，先删除libcudart.so，再通过命令建立软链接
+# ln -s libcudart.so.11.2.72 libcudart.so
+
 import bitsandbytes as bnb
 import pandas as pd
 
