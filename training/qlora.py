@@ -115,6 +115,13 @@ import logging
 # 则修改libcudart.so软链接指向的libcudart.so版本，先删除libcudart.so，再通过命令建立软链接
 # ln -s libcudart.so.11.2.72 libcudart.so
 
+# 某些情况下用pip install bitsandbytes命令只能下载0.38.1，此时需要从pypi下载whl文件，选择从文件安装
+
+# 如果报出RuntimeError: Something when wrong when trying to find file. Maybe you do not have a linux system?
+# 先检查CUDA SETUP: Loading binary /home/huangzhiguo/anaconda3/envs/transformers/lib/python3.9/site-packages/bitsandbytes/libbitsandbytes_cuda112.so
+# libbitsandbytes_cuda112.so是否正确
+
+# 如果正确则可能是__main__.py函数出错
 import bitsandbytes as bnb
 import pandas as pd
 
