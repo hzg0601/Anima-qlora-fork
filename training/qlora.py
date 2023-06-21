@@ -488,7 +488,8 @@ def get_accelerate_model(args, checkpoint_dir):
     #       则直接返回模型类；否则构造{类名：类}字典，从config的architectures字段取出其值，
     #       按照值在{类名：类}字典中取出对应的格式类，然后调用from_pretrained方法实例化模型；
     #
-    # 因此quantization_config参数是在具体的模型类自定义的，即在repo_id/modeling_{model}.py文件中自定义。
+    #* 因此quantization_config参数是在具体的模型类自定义的，即在repo_id/modeling_{model}.py文件中自定义
+    #* 或者在architectures 对应的类自定义的。
 
 
     model = AutoModelForCausalLM.from_pretrained(
