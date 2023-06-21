@@ -433,18 +433,62 @@ def get_accelerate_model(args, checkpoint_dir):
     logger.info(f'loading base model {args.model_name_or_path}...')
     # 量化时更新梯度
     compute_dtype = (torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+    
+    # transformers的每个模型仓库都包括如下几个文件：
+    # 1. configuration_{model}.py，该脚本定义一个PretrainedConfig子类，用于指定模型的配置字段->config_dict；
+    # 2. config.json, 指定architectures字段，以及模型结构和token的字段。
+    # 3. modeling_{model}.py
+    # 4. 模型检查点
+    # 5. tokenizer_{model}.py
+    # 6. tokenizer_config.json
+    
     # kwargs可用于更新configuration对象（在加载后）并启动模型（例如，output_attentions=True）。 
     # 根据是提供config还是自动加载而表现不同：
     # 如果提供了config，**kwargs 将直接传递给底层模型的 __init__ 方法
     # 如果未提供config，kwargs 将首先传递给Config类初始化函数（from_pretrained()）。
     # 与config属性对应的 kwargs 的每个键将用于覆盖所述属性,不对应任何config属性的剩余键将传递给底层模型的 __init__ 函数。
 
-    # AutoModel.from_pretraind流程：
-    # 1. 先调用AutoConfig.from_pretrained等加载config, kwargs
-    # 2. 如果参数中存在auto_map参数，调用get_class_from_dynamic_module函数加载模型实例；
-    #    如果没有，则调用_get_model_class函数加载模型实例model_class；
-    # 3. 然后调用model_class.from_pretrained加载模型
-    # todo 用debug模式查看调用链
+    # AutoModel.from_pretrained流程：
+    #    1 kwargs如果存在config,trust_remote_code字段，则将其从kwargs中pop取出；
+    #    2 定义hub_kwargs_names列表，从kwargs中pop出hug类字段到hub_kwargs中；
+    #    3 如果config不是PretrainedConfig类，则调用AutoConfig.from_pretrained类生成config,kwargs;
+    #       (1). AutoConfig.from_pretrained首先在kwargs中写入_from_auto，name_or_path,trust_remote_code字段的值
+    #       (2). 然后调用PretrainedConfig.get_config_dict方法，返回config_dict为模型的配置信息，kwargs去除了加载和下载配置
+    #           该方法调用_get_config_dict,_get_config_dict方法从kwargs中取出下载配置，如cache_dir,resume_download关键字等
+    #           如果方法传入的name_or_path是文件路径，则设定resolved_config_file为该路径，is_local=True
+    #           如果name_or_path经补全后为url地址，则调用download_url下载resolved_config_file
+    #           否则，从kwargs取出_config_file或默认为config.json,调用cached_file
+    #           加载或下载resolved_config_file,然后调用_dict_from_json_file加载config_dict.
+    #*           最后将Config类实例config_dict和kwargs返回，故config_dict为模型的配置信息，kwargs去除了加载和下载配置。
+    #*           
+
+    #       （3).如果"auto_map"在config_dict字典中，且"AutoConfig"在"auto_map"的值中，则设定has_remote_code为True;
+    #            如果"model_type"在config字典中，且"model_type"的值在CONFIG_MAPPING_NAMES字典中，则设定has_local_code为True ;
+
+    #       (4).如果has_remote_code和trust_remote_code的值均为True,则调用get_class_from_dynamic_module加载模型类：
+    #           该方法根据传入的class_reference， pretrained_model_name_or_path
+    #           参数注册对应的类.py文件，从py文件加载类。get_class_from_dynamic_module传入的class_ref
+    #           在auto_map字段下的AutoConfig字段中。class_reference存在两种格式:
+    #           "sgugger/my-bert-model--modeling.MyBertModel"，或modeling.MyBertModel
+    #           然后调用get_cached_module_file函数加载文件，调用get_class_in_module加载对应的类，
+    #           加载类完成后，调用类的from_pretrained方法实例化Config类。
+    #       (5) 如果"model_type"在config_dict中，则取出model_type的值，调用_LazyConfigMapping类
+    #           基于CONFIG_MAPPING_NAMES初始化，使用importlib.import_module和getattr加载类，
+    #           再调用类的from_dict方法基于config_dict实例化Config类。
+    #       (6) 如果没有"auto_map","model_type"字段，则根据name_or_path在CONFIG_MAPPING中
+    #           中进行匹配，再调用from_dict方法基于config_dict实例化Config类。
+    #*      故AutoConfig类的from_pretrained方法会返回模型的Config实例config_dict,和去除下载和加载配置信息的kwargs.
+    #   4. 如果实例config_dit中存在auto_map字段，取出实例的auto_map值，取出前调用函数将auto_map的值统一加上repo_id--，
+    #       然后取出__name__的值，得到repo_id--{model}的字符串，然后get_class_from_dynamic_module函数，
+    #       该函数将下载或加载模型类对应的脚本，在通过get_class_in_module函数调用importlib.import_module
+    #       方法加载对应的模型类，模型类通过from_pretrained方法接受name_or_path,额外的--位置--模型参数model_args,
+    #       AutoConfig类实例config,hub_kwargs,kwargs进行实例化，故hub_kwargs,kwargs是_BaseAutoModelClass的属性
+    #   5. 如果AutoConfig子类的实例config是_model_mapping的key,则调用_get_model_class函数加载模型类，该函数
+    #       接受config，模型类字典_model_mapping{模型类：模型类格式或格式列表}，如果模型子类仅有一个格式，
+    #       则直接返回模型类；否则构造{类名：类}字典，从config的architectures字段取出其值，
+    #       按照值在{类名：类}字典中取出对应的格式类，然后调用from_pretrained方法实例化模型；
+    #
+    # 因此quantization_config参数是在具体的模型类自定义的，即在repo_id/modeling_{model}.py文件中自定义。
 
 
     model = AutoModelForCausalLM.from_pretrained(
