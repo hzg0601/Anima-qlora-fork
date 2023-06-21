@@ -31,7 +31,7 @@
             将norm层转换为fp32.
 4. 设置tokenizer.
     4.1 AutoTokenizer.from_pretrained方法实例化tokenizer,
-    4.2 调用smart_tokenizer_and_embedding_resize模型的词表长度和新加入的token的权重
+    4.2 调用smart_tokenizer_and_embedding_resize更新模型的词表长度和新加入的token的权重
     4.3 对于llama类模型，加入eos_token,bos_token,unk_token.
 5. 调用组装数据函数make_data_module，加载数据，分割数据,返回一个包括：
     train_dataset,eval_dataset,predict_dataset,datacollator的字典。
@@ -68,7 +68,7 @@
         2. 调用实例化的tokenizer对输入的sources,targets进行tokenize;
         3. 如果不执行predict_with_generate,则将输入输出拼接作为一条输入
             如果不执行train_on_source,则将输入掩码，以掩码和输出作为一条label,
-            否则，就把输入和输出拼接作为一条label
+            否则，就把输入和输出拼接作为一条label（train_on_source除了目标文本之外是否还对输入进行训练）
           如果执行predict_with_generate,则只将输入作为一条输入;
           得到input_ids和labels列表。
         4. 对input_ids和labels进行padding,输出以B*T(最长句子的长度)的形式。
@@ -490,7 +490,7 @@ def get_accelerate_model(args, checkpoint_dir):
     #
     #* quantization_config参数是在PretrainedModel类定义的，自定义的类或从architectures加载的类都继承了PretrainedModel类
     #* 具体支持的参数，参考modeling_utils.py文件
-
+    # AutoModelForCausalLM.from_pretrained也支持enable_deepspeed，enable_fsdp等
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
@@ -547,10 +547,22 @@ def get_accelerate_model(args, checkpoint_dir):
     model.config.torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
     # 
     if not args.full_finetune:
+        # 1. prepare_model_for_kbit_training(model,use_gradient_checkpointing=True)
+        # 该方法封装了训练前准备模型的所有协议，包括：
+        # (1) 将layernorm层投射为fp32;
+        # (2) 将所有的输出embedding层设为require_grads
+        # (3) 将lm_head向上转换为fp32.
+        # 具体方案：
+        # (1) 将基础模型的所有参数设为requires_grad = False
+        # (2) 将所有的fp16或bf16的参数设为pf32
+        # (3) 如果基础模型is_loaded_in_{k}bit，且use_gradient_checkpointing=True,
+        #     则enable_input_require_grads
+        # (4) 启动模型的gradient_checkpointing_enable
+    #* -----与下文也重复了-----------
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-
+    #* ------------------------------
     if not args.full_finetune:
         if checkpoint_dir is not None:
             # 如果checkpoint_dir存在，则从adapter_model中加载adapter权重，返回一个PeftModel类
@@ -573,6 +585,7 @@ def get_accelerate_model(args, checkpoint_dir):
                 task_type="CAUSAL_LM",
             )
             # Returns a Peft model object from a model and a config.
+            # 返回一个PeftModel类
             model = get_peft_model(model, config)
     # 对于模型的所有模块，如果模块是一个LoraLayer，且支持bf16类型，则将该层转换为bf16类型
     # 如果模块是一个正则层，则模块的类型转换为float32位
@@ -635,6 +648,8 @@ def smart_tokenizer_and_embedding_resize(
 
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
+
+
 # 数据处理类：__call__方法的输入为一个dict的序列,dict包括两个键：input, output
 # 1. 取出输入instances的input和output作为sources和targets
 # 2. 执行tokenize操作，并执行truncation操作，保证输出的tokenize不超过max_len
@@ -712,6 +727,7 @@ class DataCollatorForCausalLM(object):
         if labels is not None:
             data_dict['labels'] = labels
         return data_dict
+    
 # 将examples中instances字段，reformulations字段的每个样本组装到out的input,output字段中
 def extract_unnatural_instructions_data(examples, extract_reformulations=False):
     """
@@ -777,6 +793,7 @@ def local_dataset(dataset_name):
     split_dataset = full_dataset.train_test_split(test_size=0.1)
     return split_dataset
 
+#! 如果增加新的数据集，应在此处适配。首先弄清模型的输入形式，然后弄清数据集的格式
 def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     """
     Make dataset and collator for supervised fine-tuning.
@@ -998,6 +1015,12 @@ def train():
     # 返回一个包括train_dataset,eval_dataset,predict_dataset,datacollator的字典
     data_module = make_data_module(tokenizer=tokenizer, args=args)
     # 实例化Seq2SeqTrainer类进行训练，Seq2SeqTrainer类是Trainer的子类
+    # Seq2SeqTrainer(model,args,data_collator,train_dataset,eval_dataset,tokenizer,
+    # model_init,computer_metrics,callbacks,optimizers,preprocess_logit_for_metric)
+    # 该类的train方法直接继承自Trainer,重写了evaluate，predict，prediction_step方法
+    # evaluate和predict方法基于max_length,args.max_new_tokens更新了max_length参数，
+    # 基于num_beams和args.generation_num_beams更新了num_beams参数
+    # 
     trainer = Seq2SeqTrainer(
         model=model, 
         tokenizer=tokenizer,
