@@ -312,7 +312,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
     sample_generate: bool = field(default=False, metadata={"help": 'If do sample generation on evaluation.'})
-    debug_mode: bool = field(default=False, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
+    debug_mode: bool = field(default=True, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
 
 @dataclass
 class GenerationArguments:
@@ -576,6 +576,27 @@ def get_accelerate_model(args, checkpoint_dir):
             # 再调用get_peft_model实例化一个PeftModel类
             logger.info(f'adding LoRA modules...')
             modules = find_all_linear_names(args, model)
+            # LoraConfig是PeftConfig的一个子类
+            # LoraConfig(
+            # r: dimension of LoRA
+            # lora_alpha:The alpha parameter for Lora scaling.
+            # lora_dropout: The dropout probability for Lora layers.
+            # fan_in_fan_out:Set this to True if the layer to replace stores weight like (fan_in, fan_out).
+            # bias:
+            # modules_to_save: List of modules apart from LoRA layers to be set as trainable
+            #                  and saved in the final checkpoint.
+            # layers_to_transform: The layer indexes to transform, if this argument is specified, it will apply the LoRA transformations on
+            #                      the layer indexes that are specified in this list. If a single integer is passed, it will apply the LoRA
+            #                      transformations on the layer at this index.
+            # layers_pattern: The layer pattern name, used only if `layers_to_transform` is different from `None` and if the layer
+            #                 pattern is not in the common layers pattern.
+            # peft_type=PeftType.LORA,
+            # task_type:
+            # name_or_path        
+            # revision:The specific model version to use
+            # inference_mode: Whether to use inference mode
+            # target_modules:
+            # init_lora_weights)
             config = LoraConfig(
                 r=args.lora_r,
                 lora_alpha=args.lora_alpha,
