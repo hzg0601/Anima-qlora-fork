@@ -45,6 +45,8 @@ python qlora.py --dataset="chinese-vicuna" \
     --output_dir $OUTPUT_PATH \
     --report_to 'wandb' \
     --sample_generate `# test sample generation every once a while`  \
-    --save_steps 200 `# 20 for debug mode only, 200 for training`
-
+    --save_steps 200 `# 20 for debug mode only, 200 for training` \
+    < qlora_logs.log > outpout.txt 2>&1 &
 #    --debug_mode `# only set when it's debug mode` \
+# 如果出现 nohup: ignoring input and appending output to ‘nohup.out’，则表明命令里使用了标准输入（stdin）而不是重定向输入
+# 此时需要将标准输入重定向到文件中，即<qlora_logs.log,前提是qlora_logs.log必须是已经存在的文件
