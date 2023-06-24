@@ -1,6 +1,20 @@
+# set -x会在执行每一行 shell 脚本时，把执行的内容输出来。它可以让你看到当前执行的情况，里面涉及的变量也会被替换成实际的值。
 
+# set -e会在执行出错时结束程序，就像其他语言中的“抛出异常”一样。（准确说，不是所有出错的时候都会结束程序，见下面的注）
 
-set -x -e
+# 注：set -e结束程序的条件比较复杂，在man bash里面，足足用了一段话描述各种情景。大多数执行都会在出错时退出，除非 shell 命令位于以下情况：
+
+# 一个 pipeline 的非结尾部分，比如 error | ok
+
+# 一个组合语句的非结尾部分，比如 ok && error || other
+
+# 一连串语句的非结尾部分，比如 error; ok
+
+# 位于判断语句内，包括 test、if、 while 等等。
+
+# 这两个组合在一起用，可以在 debug 的时候替你节省许多时间。
+
+set -e # -x
 
 run_id=$(date +%s)
 echo "RUN ID: $run_ts"
@@ -13,7 +27,8 @@ OUTPUT_PATH=$ROOT_DIR_BASE/output_$run_id
 
 mkdir -p $OUTPUT_PATH
 
-
+input_log="qlora_logs.log"
+[ -f $input_log ] && echo "input_log $input_log found" || touch $input_log && echo "input_log created"
 
 # based on test in ./test_cn_dataset_lenghts.py :
 
@@ -46,6 +61,7 @@ python qlora.py --dataset="chinese-vicuna" \
     --report_to 'wandb' \
     --sample_generate `# test sample generation every once a while`  \
     --save_steps 200 `# 20 for debug mode only, 200 for training` \
+    --do_mmlu_eval `#do mmlu eval` \
     < qlora_logs.log > guanoco_33b_chinese_vicuna.log 2>&1 &
 #    --debug_mode `# only set when it's debug mode` \
 # 如果出现 nohup: ignoring input and appending output to ‘nohup.out’，则表明命令里使用了标准输入（stdin）而不是重定向输入
