@@ -34,6 +34,8 @@ input_log="qlora_logs.log"
 wandb login
 
 export WANDB_PROJECT="guanaco-33b-tuning"
+# wandb.errors.CommError: Run initialization has timed out after 60.0 sec. 
+export WANDB_MODE="offline"
 # based on test in ./test_cn_dataset_lenghts.py :
 
 #source len @qt0.8: 188.0
