@@ -638,10 +638,11 @@ def print_trainable_parameters(args, model):
         if param.requires_grad:
             trainable_params += param.numel()
     if args.bits == 4: trainable_params /= 2
+    # ! use trainable twice may be slightly confusing
     logger.info(
         f"trainable params: {trainable_params} || "
         f"all params: {all_param} || "
-        f"trainable: {100 * trainable_params / all_param}"
+        f"trainable ratio: {100 * trainable_params / all_param}"
     )
 
 # tokenizer调用add_special_tokens将自定义的special_tokens_dict加入tokenizer，更新token词表
@@ -812,18 +813,20 @@ def local_dataset(dataset_name):
     
     split_dataset = full_dataset.train_test_split(test_size=0.1)
     return split_dataset
-
+#! 重复下载数据
 def recursive_load_dataset(dataset_name,max_try=20):
-    """for some region and country, it casually raise ConnectionError, so recursively downloading the dataset is necessary"""
+    #for some regions and countries, `load_dataset` casually raise ConnectionError, 
+    # so recursively downloading the dataset would make the project more robust.
     try_turn = 0
     while True:
         try:
             data = load_dataset(dataset_name) 
             return data
         except Exception as e:
-            print("download dataset unsuccessful, re-downloading...")
+            logger.info("Download dataset failed, re-downloading...")
             try_turn += 1
             if try_turn > max_try:
+                logger.info("The number of retries exceeded `max_try`,maybe you are offline, please check the network.")
                 raise ConnectionError
             else:
                 continue
