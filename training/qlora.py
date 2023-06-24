@@ -814,6 +814,21 @@ def local_dataset(dataset_name):
     split_dataset = full_dataset.train_test_split(test_size=0.1)
     return split_dataset
 
+def recursive_load_dataset(dataset_name,max_try=20):
+    """for some region and country, it casually raise ConnectionError, so recursively downloading the dataset is necessary"""
+    try_turn = 0
+    while True:
+        try:
+            data = load_dataset(dataset_name) 
+            return data
+        except Exception as e:
+            print("download dataset unsuccessful, re-downloading...")
+            try_turn += 1
+            if try_turn > max_try:
+                raise ConnectionError
+            else:
+                continue
+            
 #! 如果增加新的数据集，应在此处适配。首先弄清模型的输入形式，然后弄清数据集的格式
 def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     """
@@ -839,25 +854,26 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         - vicuna
 
     """
+
     def load_data(dataset_name):
         if dataset_name == 'alpaca':
-            return load_dataset("tatsu-lab/alpaca")
+            return recursive_load_dataset("tatsu-lab/alpaca")
         elif dataset_name == 'alpaca-clean':
-            return load_dataset("yahma/alpaca-cleaned")
+            return recursive_load_dataset("yahma/alpaca-cleaned")
         elif dataset_name == 'chip2':
-            return load_dataset("laion/OIG", data_files='unified_chip2.jsonl')
+            return recursive_load_dataset("laion/OIG", data_files='unified_chip2.jsonl')
         elif dataset_name == 'self-instruct':
-            return load_dataset("yizhongw/self_instruct", name='self_instruct')
+            return recursive_load_dataset("yizhongw/self_instruct", name='self_instruct')
         elif dataset_name == 'hh-rlhf':
-            return load_dataset("Anthropic/hh-rlhf")
+            return recursive_load_dataset("Anthropic/hh-rlhf")
         elif dataset_name == 'longform':
-            return load_dataset("akoksal/LongForm")
+            return recursive_load_dataset("akoksal/LongForm")
         elif dataset_name == 'oasst1':
-            return load_dataset("timdettmers/openassistant-guanaco")
+            return recursive_load_dataset("timdettmers/openassistant-guanaco")
         elif dataset_name == 'vicuna':
             raise NotImplementedError("Vicuna data was not released.")
         elif dataset_name == 'chinese-vicuna':
-            return load_dataset("Chinese-Vicuna/guanaco_belle_merge_v1.0")
+            return recursive_load_dataset("Chinese-Vicuna/guanaco_belle_merge_v1.0")
         else:
             if os.path.exists(dataset_name):
                 try:
@@ -1001,11 +1017,12 @@ def train():
     set_seed(args.seed)
 
     # Tokenizer
+    # 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         padding_side="right",
-        use_fast=False, # Fast tokenizer giving issues.
+        use_fast=True if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_name_or_path else False, # Fast tokenizer giving issues.
         tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
     )
     # 如果tokenizer存在_pad_token,则调用smart_tokenizer_and_embedding_resize，其逻辑为：
@@ -1018,7 +1035,7 @@ def train():
             tokenizer=tokenizer,
             model=model,
         )
-    # 对于llama模型，需要增加eos_token,bos_token,unk_token
+    # 对于llama族的LlamaTokenizer（如guanaco），需要增加eos_token,bos_token,unk_token
     if 'llama' in args.model_name_or_path or isinstance(tokenizer, LlamaTokenizer):
         # LLaMA tokenizer may not have correct special tokens set.
         # Check and add them if missing to prevent them from being parsed into different tokens.
