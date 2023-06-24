@@ -153,7 +153,6 @@ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
-
 logging_file_path = f"./qlora_logs.log"
 
 handlers = [
@@ -1148,7 +1147,8 @@ def train():
     total = 0
     for k, v in dtypes.items(): total+= v
     for k, v in dtypes.items():
-        logger.info(k, v, v/total)
+        #! TypeError: not all arguments converted during string formatting
+        logger.info(f"the type, number, and ratio of data are {k, v, v/total},respectively")
     #? all_metrics 记录metric的字典
     all_metrics = {"run_name": args.run_name}
     # Training

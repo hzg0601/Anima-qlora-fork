@@ -28,8 +28,12 @@ OUTPUT_PATH=$ROOT_DIR_BASE/output_$run_id
 mkdir -p $OUTPUT_PATH
 
 input_log="qlora_logs.log"
-[ -f $input_log ] && echo "input_log $input_log found" || touch $input_log && echo "input_log created"
+[ -f $input_log ] && echo "input_log $input_log found" || touch $input_log
 
+# command 命令需要交互式输入：如果 command 命令需要从终端接收输入，例如密码或交互式菜单，那么无法在脚本模式下运行nohup命令。
+wandb login
+
+export WANDB_PROJECT="guanaco-33b-tuning"
 # based on test in ./test_cn_dataset_lenghts.py :
 
 #source len @qt0.8: 188.0
@@ -43,8 +47,11 @@ input_log="qlora_logs.log"
 #source len @qt0.98: 515.0
 #target len @qt0.98: 670.2800000000279
 
-
-python qlora.py --dataset="chinese-vicuna" \
+# nohup的重定向不起作用的情况，因为要使用wandb，故无法重定向
+# 如果 command 命令需要交互式终端才能正常运行，那么nohup命令将无法满足这个要求，因此会忽略输入并将输出附加到 "nohup.out" 文件中。
+# command 命令需要与用户交互：如果 command 命令需要与用户交互，例如向用户显示消息或询问用户是否继续执行操作，那么无法在不与终端关联的情况下运行该命令。
+# 如果command 命令需要特定的终端设备：如果 command 命令需要特定的终端设备，例如串口、并口或图形终端，那么可能无法在脚本模式下运行该命令。
+nohup python qlora.py --dataset="chinese-vicuna" \
     --dataset_format="alpaca-clean" `#alpaca-clean has similar format to chinese training dataset` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
     --per_device_train_batch_size 1 `# fix for fitting mem `\
@@ -58,11 +65,13 @@ python qlora.py --dataset="chinese-vicuna" \
     --evaluation_strategy "steps" \
     --eval_steps 200 `# 10 for debug mode only, 200 for training`  \
     --output_dir $OUTPUT_PATH \
-    --report_to 'wandb' \
+    --report_to 'wandb' \ 
     --sample_generate `# test sample generation every once a while`  \
     --save_steps 200 `# 20 for debug mode only, 200 for training` \
     --do_mmlu_eval `#do mmlu eval` \
-    < qlora_logs.log > guanoco_33b_chinese_vicuna.log 2>&1 &
+    <qlora_logs.log >guanoco_33b_chinese_vicuna.log 2>&1 &
+
 #    --debug_mode `# only set when it's debug mode` \
 # 如果出现 nohup: ignoring input and appending output to ‘nohup.out’，则表明命令里使用了标准输入（stdin）而不是重定向输入
 # 此时需要将标准输入重定向到文件中，即<qlora_logs.log,前提是qlora_logs.log必须是已经存在的文件
+# 后续可以看一下怎么调用wandb
