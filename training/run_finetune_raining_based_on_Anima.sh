@@ -35,6 +35,8 @@ wandb login
 
 export WANDB_PROJECT="guanaco-33b-tuning"
 # wandb.errors.CommError: Run initialization has timed out after 60.0 sec. 
+# 上传wandb离线数据的方法
+# wandb sync ./wandb/offline-run-*******_******-******
 export WANDB_MODE="offline"
 # based on test in ./test_cn_dataset_lenghts.py :
 
