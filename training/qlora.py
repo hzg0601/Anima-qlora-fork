@@ -312,6 +312,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
     sample_generate: bool = field(default=False, metadata={"help": 'If do sample generation on evaluation.'})
     debug_mode: bool = field(default=True, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
+    deepspeed: str = field(default="./deepspeed_config.json",metadata={"help": "the path to deepspeed config file"})
 
 @dataclass
 class GenerationArguments:
@@ -870,10 +871,13 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             return recursive_load_dataset("Anthropic/hh-rlhf")
         elif dataset_name == 'longform':
             return recursive_load_dataset("akoksal/LongForm")
+        # 包含了多语言，数据质量较高
         elif dataset_name == 'oasst1':
             return recursive_load_dataset("timdettmers/openassistant-guanaco")
         elif dataset_name == 'vicuna':
             raise NotImplementedError("Vicuna data was not released.")
+        # guanaco_belle_merge_v1.0 数据质量一般
+        # bigscience/xP3 中文数据质量一般，xP3all中文质量稍好，中文数据集下有不少藏语实例
         elif dataset_name == 'chinese-vicuna':
             return recursive_load_dataset("Chinese-Vicuna/guanaco_belle_merge_v1.0")
         else:
