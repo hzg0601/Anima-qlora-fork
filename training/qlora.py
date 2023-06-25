@@ -1060,7 +1060,10 @@ def train():
     # 该类的train方法直接继承自Trainer,重写了evaluate，predict，prediction_step方法
     # evaluate和predict方法基于max_length,args.max_new_tokens更新了max_length参数，
     # 基于num_beams和args.generation_num_beams更新了num_beams参数
-    # 
+    
+    # todo 如果需要使用deepspeed，则需要在training_args中加入deepspeed参数
+    # todo 参数指向deepspeed配置文件的位置
+    # todo deepspeed配置的参数参考https://www.deepspeed.ai/docs/config-json/
     trainer = Seq2SeqTrainer(
         model=model, 
         tokenizer=tokenizer,
