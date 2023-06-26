@@ -8,6 +8,10 @@
 6. `facebook/flores`包含200多种语言，官方维护应该比较可靠
 7. `mteb/sts22-crosslingual-sts`包含多种语言，但似乎是对文档相似度打标，中文以新闻为主。
 8. `QingyiSi/Alpaca-CoT`用GPT-4生成，包含多种语言，以CoT为instruct.
-9. `BelleGroup/train_0.5M_CN`数据质量较好，但似乎没有统一的模板，也存在output较短的问题。multiturn_chat_0.8M 
+9. `BelleGroup/train_0.5M_CN`数据质量较好，但似乎没有统一的模板，也存在output较短的问题。multiturn_chat_0.8M
 10. `TigerResearch/sft_zh`具有比较丰富的数量来源，如果知乎、alpaca中文等，质量似乎也不错。
 
+# HFRL数据集
+
+1. `tatsu-lab/alpaca_farm/.*_preference`
+2. ``Anthropic/hh-rlhf``

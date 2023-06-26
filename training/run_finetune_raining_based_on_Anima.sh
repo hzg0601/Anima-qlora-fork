@@ -56,7 +56,7 @@ export WANDB_MODE="offline"
 # command 命令需要与用户交互：如果 command 命令需要与用户交互，例如向用户显示消息或询问用户是否继续执行操作，那么无法在不与终端关联的情况下运行该命令。
 # 如果command 命令需要特定的终端设备：如果 command 命令需要特定的终端设备，例如串口、并口或图形终端，那么可能无法在脚本模式下运行该命令。
 nohup python qlora.py --dataset="chinese-vicuna" \
-    --dataset_format="alpaca-clean" `#alpaca-clean has similar format to chinese training dataset` \
+    --dataset_format="Belle_0.5M" `#alpaca-clean has similar format to chinese training dataset` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
     --per_device_train_batch_size 1 `# fix for fitting mem `\
     --gradient_accumulation_steps 16 `# QLoRA paper appendix B Table 9  `\

@@ -174,7 +174,7 @@ DEFAULT_PAD_TOKEN = "[PAD]"
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
-        default="EleutherAI/pythia-12b"
+        default="timdettmers/guanaco-33b-merged"
     )
     trust_remote_code: Optional[bool] = field(
         default=False,
@@ -209,7 +209,7 @@ class DataArguments:
         metadata={"help": "Maximum target sequence length. Sequences will be right padded (and possibly truncated)."},
     )
     dataset: str = field(
-        default='alpaca',
+        default='Belle_0.5M',
         metadata={"help": "Which dataset to finetune on. See datamodule for options."}
     )
     dataset_format: Optional[str] = field(
@@ -880,6 +880,8 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         # bigscience/xP3 中文数据质量一般，xP3all中文质量稍好，中文数据集下有不少藏语实例
         elif dataset_name == 'chinese-vicuna':
             return recursive_load_dataset("Chinese-Vicuna/guanaco_belle_merge_v1.0")
+        elif dataset_name == "Belle_0.5M":
+            return recursive_load_dataset("BelleGroup/train_0.5M_CN")
         else:
             if os.path.exists(dataset_name):
                 try:
