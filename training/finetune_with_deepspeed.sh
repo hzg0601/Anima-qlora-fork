@@ -37,12 +37,12 @@ export WANDB_MODE="offline"
 #target len @qt0.95: 491.0
 #source len @qt0.98: 515.0
 #target len @qt0.98: 670.2800000000279
+# 指定可见的GPU，如CUDA_VISIBLE_DEVICES=0,2
+export CUDA_VISIBLE_DEVICE=0
 
-
-nohup deepspeed qlora.py \
-    --num_gpus=1 \
+nohup deepspeed --num_gpus 1 qlora.py \
     --dataset="Belle_0.5M" \
-    # --dataset_format="alpaca-clean" `#alpaca-clean has similar format to chinese training dataset` \
+    --deepspeed "./deepspeed_config.json" `# path to deepspeed configuration` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
     --per_device_train_batch_size 1 `# fix for fitting mem `\
     --gradient_accumulation_steps 16 `# QLoRA paper appendix B Table 9  `\
@@ -58,9 +58,9 @@ nohup deepspeed qlora.py \
     --report_to 'wandb' \
     --sample_generate `# test sample generation every once a while`  \
     --save_steps 200 `# 20 for debug mode only, 200 for training` \
-    # --num_gpus=2 \
-    --deepspeed "./deepspeed_config.json" `# path to deepspeed configuration` \
-    --device "cuda:0" `# specify the rank of gpu when you cannot uitilize all gpu` \
-
-    # --debug_mode `# only set when it's debug mode` \
     >guanoco_33b_chinese_vicuna.log 2>&1 &
+
+    # nohup命令中间不能有空行
+    # --debug_mode `# only set when it's debug mode` \
+    # --dataset_format="alpaca-clean" `#alpaca-clean has similar format to chinese training dataset` \
+    

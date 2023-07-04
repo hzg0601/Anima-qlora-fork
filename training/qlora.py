@@ -313,8 +313,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     sample_generate: bool = field(default=False, metadata={"help": 'If do sample generation on evaluation.'})
     debug_mode: bool = field(default=True, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
     # --- path to deepspeed configuration
-    deepspeed: str = field(default="./deepspeed_config.json",metadata={"help": "the path to deepspeed config file"})
-    device: str=field(default=None,metadata={"help":"the rank of gpu to run on"})
+    deepspeed: str = field(default="./training/deepspeed_config.json",metadata={"help": "the path to deepspeed config file"})
+
 
 @dataclass
 class GenerationArguments:
@@ -523,33 +523,23 @@ def get_accelerate_model(args, checkpoint_dir):
     #* quantization_config参数是在PretrainedModel类定义的，自定义的类或从architectures加载的类都继承了PretrainedModel类
     #* 具体支持的参数，参考modeling_utils.py文件
     # AutoModelForCausalLM.from_pretrained也支持enable_deepspeed，enable_fsdp等
-    if hasattr(args,"device") and isinstance(args.device,str) and ":" in args.device:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path,
-            cache_dir=args.cache_dir,
-            load_in_4bit=args.bits == 4,
-            load_in_8bit=args.bits == 8,
-            quantization_config=quantization_config,
-            torch_dtype=torch_dtype,
-            trust_remote_code=args.trust_remote_code,
-        ).to(args.device)
-    else:
-        n_gpus = torch.cuda.device_count()
-        max_memory = f'{args.max_memory_MB}MB'
-        max_memory = {i: max_memory for i in range(n_gpus)}
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path,
-            cache_dir=args.cache_dir,
-            load_in_4bit=args.bits == 4,
-            load_in_8bit=args.bits == 8,
-            device_map='auto',
-            max_memory=max_memory,
-            quantization_config=quantization_config,
-            torch_dtype=torch_dtype,
-            trust_remote_code=args.trust_remote_code,
-        )
-        setattr(model, 'model_parallel', True)
-        setattr(model, 'is_parallelizable', True)
+
+    n_gpus = torch.cuda.device_count()
+    max_memory = f'{args.max_memory_MB}MB'
+    max_memory = {i: max_memory for i in range(n_gpus)}
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        cache_dir=args.cache_dir,
+        load_in_4bit=args.bits == 4,
+        load_in_8bit=args.bits == 8,
+        device_map='auto',
+        max_memory=max_memory,
+        quantization_config=quantization_config,
+        torch_dtype=torch_dtype,
+        trust_remote_code=args.trust_remote_code,
+    )
+    setattr(model, 'model_parallel', True)
+    setattr(model, 'is_parallelizable', True)
     # 如果梯度计算的类型为torch.float16,量化位数为4，则检验设备的计算能力，如果计算上限是8，则设备支持bf16格式
     # 提示用户可以启用--bf16参数
     if compute_dtype == torch.float16 and args.bits == 4:
