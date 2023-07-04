@@ -314,6 +314,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     debug_mode: bool = field(default=True, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
     # --- path to deepspeed configuration
     deepspeed: str = field(default="./deepspeed_config.json",metadata={"help": "the path to deepspeed config file"})
+    device: str=field(default=None,metadata={"help":"the rank of gpu to run on"})
 
 @dataclass
 class GenerationArguments:
