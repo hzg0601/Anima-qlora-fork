@@ -55,8 +55,9 @@ export WANDB_MODE="offline"
 # 如果 command 命令需要交互式终端才能正常运行，那么nohup命令将无法满足这个要求，因此会忽略输入并将输出附加到 "nohup.out" 文件中。
 # command 命令需要与用户交互：如果 command 命令需要与用户交互，例如向用户显示消息或询问用户是否继续执行操作，那么无法在不与终端关联的情况下运行该命令。
 # 如果command 命令需要特定的终端设备：如果 command 命令需要特定的终端设备，例如串口、并口或图形终端，那么可能无法在脚本模式下运行该命令。
-nohup python qlora.py --dataset="chinese-vicuna" \
-    --dataset_format="Belle_0.5M" `#alpaca-clean has similar format to chinese training dataset` \
+nohup python qlora.py \
+    --dataset="Belle_0.5M" \
+    # --dataset_format="Belle_0.5M" `#alpaca-clean has similar format to chinese training dataset` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
     --per_device_train_batch_size 1 `# fix for fitting mem `\
     --gradient_accumulation_steps 16 `# QLoRA paper appendix B Table 9  `\
@@ -76,6 +77,9 @@ nohup python qlora.py --dataset="chinese-vicuna" \
     <qlora_logs.log >guanoco_33b_chinese_vicuna.log 2>&1 &
 
 #    --debug_mode `# only set when it's debug mode` \
-# 如果出现 nohup: ignoring input and appending output to ‘nohup.out’，则表明命令里使用了标准输入（stdin）而不是重定向输入
+# 如果出现 nohup: ignoring input and appending output to ‘nohup.out’，
+# 则表明命令里使用了标准输入（stdin）而不是重定向输入
 # 此时需要将标准输入重定向到文件中，即<qlora_logs.log,前提是qlora_logs.log必须是已经存在的文件
 # 后续可以看一下怎么调用wandb
+
+# 如果上述方法仍不起作用，则表明代码中包含了交互式命令。

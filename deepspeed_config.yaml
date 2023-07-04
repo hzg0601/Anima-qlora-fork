@@ -1,6 +1,22 @@
 {
     "train_micro_batch_size_per_gpu":8,
     "train_batch_size": "auto",
+    "gradient_accumulation_steps": 16,
+    "optimizer": {
+      "type": "ZeroOneAdam",
+      "params": {
+        "lr": 1e-5,
+        "weight_decay": 0.01,
+        "bias_correction": false,
+        "var_freeze_step": 1000,
+        "var_update_scaler": 16,
+        "local_step_scaler": 1000,
+        "local_step_clipper": 16,
+        "cuda_aware": false,
+        "comm_backend_name": "mpi"
+        }
+      
+      },
      "scheduler": {
         "type": "WarmupLR",
         "params": {

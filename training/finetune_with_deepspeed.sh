@@ -1,6 +1,6 @@
 
 
-set -x -e
+set -e
 
 run_id=$(date +%s)
 echo "RUN ID: $run_ts"
@@ -8,12 +8,22 @@ echo "RUN ID: $run_ts"
 echo "START TIME: $(date)"
 
 
-ROOT_DIR_BASE=/home/ubuntu/cloudfs/saved_models/qlora_cn
+ROOT_DIR_BASE="./"
 OUTPUT_PATH=$ROOT_DIR_BASE/output_$run_id
 
 mkdir -p $OUTPUT_PATH
 
+input_log="qlora_logs.log"
+[ -f $input_log ] && echo "input_log $input_log found" || touch $input_log
 
+# command 命令需要交互式输入：如果 command 命令需要从终端接收输入，例如密码或交互式菜单，那么无法在脚本模式下运行nohup命令。
+wandb login
+
+export WANDB_PROJECT="guanaco-33b-tuning"
+# wandb.errors.CommError: Run initialization has timed out after 60.0 sec. 
+# 上传wandb离线数据的方法
+# wandb sync ./wandb/offline-run-*******_******-******
+export WANDB_MODE="offline"
 
 # based on test in ./test_cn_dataset_lenghts.py :
 
@@ -29,8 +39,10 @@ mkdir -p $OUTPUT_PATH
 #target len @qt0.98: 670.2800000000279
 
 
-python qlora.py --dataset="chinese-vicuna" \
-    --dataset_format="alpaca-clean" `#alpaca-clean has similar format to chinese training dataset` \
+nohup deepspeed qlora.py \
+    --num_gpus=1 \
+    --dataset="Belle_0.5M" \
+    # --dataset_format="alpaca-clean" `#alpaca-clean has similar format to chinese training dataset` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
     --per_device_train_batch_size 1 `# fix for fitting mem `\
     --gradient_accumulation_steps 16 `# QLoRA paper appendix B Table 9  `\
@@ -45,6 +57,10 @@ python qlora.py --dataset="chinese-vicuna" \
     --output_dir $OUTPUT_PATH \
     --report_to 'wandb' \
     --sample_generate `# test sample generation every once a while`  \
-    --save_steps 200 `# 20 for debug mode only, 200 for training`
+    --save_steps 200 `# 20 for debug mode only, 200 for training` \
+    # --num_gpus=2 \
+    --deepspeed "./deepspeed_config.json" `# path to deepspeed configuration` \
+    --device "cuda:0" `# specify the rank of gpu when you cannot uitilize all gpu` \
 
-#    --debug_mode `# only set when it's debug mode` \
+    # --debug_mode `# only set when it's debug mode` \
+    >guanoco_33b_chinese_vicuna.log 2>&1 &

@@ -312,6 +312,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
     sample_generate: bool = field(default=False, metadata={"help": 'If do sample generation on evaluation.'})
     debug_mode: bool = field(default=True, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
+    # --- path to deepspeed configuration
     deepspeed: str = field(default="./deepspeed_config.json",metadata={"help": "the path to deepspeed config file"})
 
 @dataclass
@@ -424,16 +425,46 @@ class SavePeftModelCallback(transformers.TrainerCallback):
 # 使用accelerate库多卡部署模型
 def get_accelerate_model(args, checkpoint_dir):
 
-    n_gpus = torch.cuda.device_count()
-    max_memory = f'{args.max_memory_MB}MB'
-    max_memory = {i: max_memory for i in range(n_gpus)}
+
     # 如果执行full finetune，则保存位数必须是16或32位，即必须是float32,bf16,fp16
     if args.full_finetune: assert args.bits in [16, 32]
 
     logger.info(f'loading base model {args.model_name_or_path}...')
-    # 量化时更新梯度
+    # 前向传播的数据类型
     compute_dtype = (torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+    # 数据加载时非线性层的数据类型
+    torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+
+    # BitsAngBytesConfig(load_in_8bit=False,llm_int8_threshold=6,llm_int8_skip_modules,
+    # llm_int8_enable_fp32_cpu_offload,**kwargs)
+
+    # llm_int8_threshold: float=6,对应于论文LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale
+    # 中离群值阈值。高于这个阈值的隐状态值会被视为离群值，在这些值上的参数会以fp16格式进行。
+    # 隐状态值通常是正态分布的，范围在[-35,3.5]之间，但有一些特殊的系统异常值，它们在大型模型中的分布非常不同。
+    # 这些异常值通常位于 [-60, -6] 或 [6, 60] 区间内。Int8 量化适用于值幅度约为 5，超过5的话，
+    # int8量化后的表现将极大下降。一个好的默认阈值是 6，但对于更不稳定的模型（小模型、微调），可能需要较低的阈值。
+
+    # llm_int8_skip_modules: 不进行int8量化的层列表，对于CausalLM类，lm_head通常会保持原始类型。
+    # 而某些模型如Jukebox，在不同的位置也有多个head，因此也不能进行量化。
     
+    # llm_int8_enable_fp32_cpu_offload, 此标志用于了解此功能的高级用例和用户。 
+    # 如果你想将你的模型分成不同的部分并在 GPU 上以 int8 运行一些部分而在 CPU 上以 fp32 运行一些部分，
+    # 你可以使用这个标志。 这对于卸载大型模型（例如 `google/flan-t5-xxl`）很有用。 
+    # 请注意，int8 操作不会在 CPU 上运行。
+
+    # kwargs: 初始化configuration对象的其他参数。
+
+
+    quantization_config=BitsAndBytesConfig(
+            load_in_4bit=args.bits == 4,
+            load_in_8bit=args.bits == 8,
+            llm_int8_threshold=6.0,
+            llm_int8_has_fp16_weight=False,
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=args.double_quant,
+            bnb_4bit_quant_type=args.quant_type
+        )
+
     # transformers的每个模型仓库都包括如下几个文件：
     # 1. configuration_{model}.py，该脚本定义一个PretrainedConfig子类，用于指定模型的配置字段->config_dict；
     # 2. config.json, 指定architectures字段，以及模型结构和token的字段。
@@ -491,44 +522,33 @@ def get_accelerate_model(args, checkpoint_dir):
     #* quantization_config参数是在PretrainedModel类定义的，自定义的类或从architectures加载的类都继承了PretrainedModel类
     #* 具体支持的参数，参考modeling_utils.py文件
     # AutoModelForCausalLM.from_pretrained也支持enable_deepspeed，enable_fsdp等
-
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        cache_dir=args.cache_dir,
-        load_in_4bit=args.bits == 4,
-        load_in_8bit=args.bits == 8,
-        device_map='auto',
-        max_memory=max_memory,
-        # BitsAngBytesConfig(load_in_8bit=False,llm_int8_threshold=6,llm_int8_skip_modules,
-        # llm_int8_enable_fp32_cpu_offload,**kwargs)
-
-        # llm_int8_threshold: float=6,对应于论文LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale
-        # 中离群值阈值。高于这个阈值的隐状态值会被视为离群值，在这些值上的参数会以fp16格式进行。
-        # 隐状态值通常是正态分布的，范围在[-35,3.5]之间，但有一些特殊的系统异常值，它们在大型模型中的分布非常不同。
-        # 这些异常值通常位于 [-60, -6] 或 [6, 60] 区间内。Int8 量化适用于值幅度约为 5，超过5的话，
-        # int8量化后的表现将极大下降。一个好的默认阈值是 6，但对于更不稳定的模型（小模型、微调），可能需要较低的阈值。
-
-        # llm_int8_skip_modules: 不进行int8量化的层列表，对于CausalLM类，lm_head通常会保持原始类型。
-        # 而某些模型如Jukebox，在不同的位置也有多个head，因此也不能进行量化。
-        
-        # llm_int8_enable_fp32_cpu_offload, 此标志用于了解此功能的高级用例和用户。 
-        # 如果你想将你的模型分成不同的部分并在 GPU 上以 int8 运行一些部分而在 CPU 上以 fp32 运行一些部分，
-        # 你可以使用这个标志。 这对于卸载大型模型（例如 `google/flan-t5-xxl`）很有用。 
-        # 请注意，int8 操作不会在 CPU 上运行。
-
-        # kwargs: 初始化configuration对象的其他参数。
-        quantization_config=BitsAndBytesConfig(
+    if hasattr(args,"device") and isinstance(args.device,str) and ":" in args.device:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            cache_dir=args.cache_dir,
             load_in_4bit=args.bits == 4,
             load_in_8bit=args.bits == 8,
-            llm_int8_threshold=6.0,
-            llm_int8_has_fp16_weight=False,
-            bnb_4bit_compute_dtype=compute_dtype,
-            bnb_4bit_use_double_quant=args.double_quant,
-            bnb_4bit_quant_type=args.quant_type
-        ),
-        torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
-        trust_remote_code=args.trust_remote_code,
-    )
+            quantization_config=quantization_config,
+            torch_dtype=torch_dtype,
+            trust_remote_code=args.trust_remote_code,
+        ).to(args.device)
+    else:
+        n_gpus = torch.cuda.device_count()
+        max_memory = f'{args.max_memory_MB}MB'
+        max_memory = {i: max_memory for i in range(n_gpus)}
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            cache_dir=args.cache_dir,
+            load_in_4bit=args.bits == 4,
+            load_in_8bit=args.bits == 8,
+            device_map='auto',
+            max_memory=max_memory,
+            quantization_config=quantization_config,
+            torch_dtype=torch_dtype,
+            trust_remote_code=args.trust_remote_code,
+        )
+        setattr(model, 'model_parallel', True)
+        setattr(model, 'is_parallelizable', True)
     # 如果梯度计算的类型为torch.float16,量化位数为4，则检验设备的计算能力，如果计算上限是8，则设备支持bf16格式
     # 提示用户可以启用--bf16参数
     if compute_dtype == torch.float16 and args.bits == 4:
@@ -539,12 +559,11 @@ def get_accelerate_model(args, checkpoint_dir):
             logger.info('Your GPU supports bfloat16, you can accelerate training with the argument --bf16')
             logger.info('='*80)
 
-    setattr(model, 'model_parallel', True)
-    setattr(model, 'is_parallelizable', True)
+
     #? 重复了吧，AutoModelForCausalLM.from_pretrained已经设置了这个参数，且完全可以将之设为一个变量
     #?为什么要升类型，混合精度计算里，更新梯度用torch.float32,而前向传播用torch.float16,是否与此有关
     #? 若如此，则compute_dtype，就是指前向传播的数据类型
-    model.config.torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+    model.config.torch_dtype=torch_dtype
     # 
     if not args.full_finetune:
         # 1. prepare_model_for_kbit_training(model,use_gradient_checkpointing=True)
@@ -897,7 +916,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         # alpaca类数据集的格式应类似一个dataframe,包括input,instruction两个字段
         if (
             dataset_format == 'alpaca' or dataset_format == 'alpaca-clean' or 
-            (dataset_format is None and args.dataset in ['alpaca', 'alpaca-clean'])
+            (dataset_format is None and args.dataset in ['alpaca', 'alpaca-clean',"Belle_0.5M"])
         ):
             # 输出的是以input为key,prompt为字段的字典，故format_dataset的输出也是如此
             dataset = dataset.map(extract_alpaca_dataset, remove_columns=['instruction'])
