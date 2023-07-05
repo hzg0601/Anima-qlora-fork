@@ -40,9 +40,9 @@ export WANDB_MODE="offline"
 # 指定可见的GPU，如CUDA_VISIBLE_DEVICES=0,2
 # export CUDA_VISIBLE_DEVICE=0,1
 
-nohup deepspeed --num_gpus 2 ./training/qlora.py \
+nohup ds --num_gpus=2 \
+    ./training/qlora.py \
     --dataset="Belle_0.5M" \
-    --deepspeed "./training/deepspeed_config.json" `# path to deepspeed configuration` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
     --per_device_train_batch_size 1 `# fix for fitting mem `\
     --gradient_accumulation_steps 16 `# QLoRA paper appendix B Table 9  `\
@@ -58,6 +58,7 @@ nohup deepspeed --num_gpus 2 ./training/qlora.py \
     --report_to 'wandb' \
     --sample_generate `# test sample generation every once a while`  \
     --save_steps 200 `# 20 for debug mode only, 200 for training` \
+    --deepspeed "./training/deepspeed_config.json" `# path to deepspeed configuration` \
     >guanoco_33b_chinese_vicuna.log 2>&1 &
 
     # nohup命令中间不能有空行
