@@ -160,9 +160,20 @@ rpm2cpio libaio-devel-0.3.109-13.el7.x86_64.rpm |cpio -idmv #为无root用户安
 
 此时参考https://blog.csdn.net/weixin_44321570/article/details/128514763，搜索anaconda中对应的其他文件夹下的该文件，并复制到缺失的目录中去。
 
-****切记安装的torch版本要低于2.0,并且通过DS_BUILD_OPS=1 pip install deepspeed安装，不要通过源码安装，在centos7.0，CUDA=11.2但torch的cuda在cuda117的情况下，几乎不可能安装成功,安装完成后还要记得执行如下语句：****
+1.6 ****切记安装的torch版本要低于2.0,并且通过DS_BUILD_OPS=1 pip install deepspeed安装，不要通过源码安装，在centos7.0，CUDA=11.2但torch的cuda在cuda117的情况下，几乎不可能安装成功,安装完成后还要记得执行如下语句：****
 
 ```
 import deepspeed
 deepspeed.ops.op_builder.CPUAdamBuilder().load()
 ```
+
+如果报错就多试几次。
+
+1.7 如果要配合huggingface的accelerator，则截至2023-07-06必须要基于源码安装，先运行install.sh，然后根据提示将缺失的模块从源码复制到site-packages/deepspeed目录，包括
+accelerator ->accelerator
+
+csrc -> ops/csrc
+
+op_builder ->ops/op_builder
+
+然后再执行 `deepspeed.ops.op_builder.CPUAdamBuilder().load()`

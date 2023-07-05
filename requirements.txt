@@ -7,6 +7,7 @@ evaluate==0.4.0
 scikit-learn==1.2.2
 sentencepiece==0.1.99
 wandb==0.15.3
+# triton==2.0.0
 # 千万不要为了好玩安装apex,torch_xla,除非你有sudo权限
 # 如果非要使用apex，可以使用conda install -c conda-forge nvidia-apex，然后重装torch
 # 或下载apex源码后，使用python setup.py install 安装
