@@ -38,9 +38,9 @@ export WANDB_MODE="offline"
 #source len @qt0.98: 515.0
 #target len @qt0.98: 670.2800000000279
 # 指定可见的GPU，如CUDA_VISIBLE_DEVICES=0,2
-export CUDA_VISIBLE_DEVICE=0
+export CUDA_VISIBLE_DEVICE=0,1
 
-nohup deepspeed --num_gpus 1 qlora.py \
+nohup deepspeed --num_gpus 2 qlora.py \
     --dataset="Belle_0.5M" \
     --deepspeed "./deepspeed_config.json" `# path to deepspeed configuration` \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\
