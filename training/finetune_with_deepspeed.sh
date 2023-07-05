@@ -47,7 +47,7 @@ nohup deepspeed --num_gpus 2 qlora.py \
     --per_device_train_batch_size 1 `# fix for fitting mem `\
     --gradient_accumulation_steps 16 `# QLoRA paper appendix B Table 9  `\
     --max_steps 10000 `# QLoRA paper appendix B Table 9, follow paper setting even though cn data is 690k much bigger than OASST1 9k, batch size considering accum`\
-    --model_name_or_path "timdettmers/guanaco-33b-merged" \
+    --model_name_or_path huggyllama/llama-7b `# "timdettmers/guanaco-33b-merged"` \
     --source_max_len 512  `# default setting in code, cn model 2048 too long  `\
     --target_max_len 512 `# follow QLoRA paper appendix B Table 9 `\
     --eval_dataset_size 1 `# mainly for testing, no need to be big` \
