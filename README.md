@@ -102,7 +102,7 @@ print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_to
 
 # FAQ
 
-通过pip install deepspeed按照后，使用脚本报错：
+1 通过pip install deepspeed按照后，使用脚本报错：
 
 ```
 AttributeError: 'DeepSpeedCPUAdam' object has no attribute 'ds_opt_adam'
@@ -114,7 +114,7 @@ AttributeError: 'DeepSpeedCPUAdam' object has no attribute 'ds_opt_adam'
 DS_BUILD_OPS=1 pip install deepspeed
 ```
 
-如果上述命令最终提示需要安装gcc-5.0以上版本，则根据如下提示安装gcc。
+1.0 如果上述命令最终提示需要安装gcc-5.0以上版本，则根据如下提示安装gcc。
 
 http://c.biancheng.net/view/7933.html
 
@@ -134,6 +134,10 @@ source ~/.bashrc #使环境变量生效
 
 ```
 
+如果出现 `见configure: error: libgmp not found or uses a different ABI (including static vs shared)`,则需要依次独立编译gmp,mpf,mpc,isl
+
+https://zhuanlan.zhihu.com/p/627799889
+
 1.3 如果执行 `DS_BUILD_OPS=1 pip install deepspeed`提示没有安装libaio-devel，则下载libaio-devel安装包，然后执行：
 
 ```
@@ -141,17 +145,19 @@ rpm2cpio libaio-devel-0.3.109-13.el7.x86_64.rpm |cpio -idmv #为无root用户安
 
 ```
 
-如果上述办法仍然行不通，可以通过执行:
+1.4 如果上述办法仍然行不通，可以通过执行:
 
 ```
  conda install -c conda-forge gcc_linux-64
  conda install -c conda-forge gxx_linux-64
 ```
 
-来安装所有依赖，再执行 `DS_BUILD_OPS=1 pip install deepspeed`,但该方法不会安装最新的deepspeed。
+来安装所有依赖，再执行 `DS_BUILD_OPS=1 pip install deepspeed`,但该方法不会安装最新的deepspeed，并且也不会安装libacynio.
 
-如果上述命令安装后报错：``ModuleNotFoundError: No module named _sysconfigdata_x86_64_conda_cos7_linux_gnu.py``
+1.5 如果上述命令安装后报错：``ModuleNotFoundError: No module named _sysconfigdata_x86_64_conda_cos7_linux_gnu.py``
 
 则表明在当前的环境下的python中丢失了一个备份文件，即报错的文件 `_sysconfigdata_x86_64_conda_cos7_linux_gnu.py`
 
 此时参考https://blog.csdn.net/weixin_44321570/article/details/128514763，搜索anaconda中对应的其他文件夹下的该文件，并复制到缺失的目录中去。
+
+****切记安装的torch版本要低于2.0,并且通过DS_BUILD_OPS=1 pip install deepspeed安装，不要通过源码安装，在centos7.0，CUDA=11.2但torch的cuda在cuda117的情况下，几乎不可能安装成功****
