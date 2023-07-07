@@ -40,7 +40,7 @@ export WANDB_MODE="offline"
 # 指定可见的GPU，如CUDA_VISIBLE_DEVICES=0,2
 # export CUDA_VISIBLE_DEVICE=0,1
 
-nohup ds --num_gpus=2 \
+nohup torchrun --nproc_per_node=2 \
     ./training/qlora.py \
     --dataset="Belle_0.5M" \
     --learning_rate 0.0001 `# QLoRA paper appendix B Table 9 `\

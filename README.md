@@ -177,3 +177,6 @@ csrc -> ops/csrc
 op_builder ->ops/op_builder
 
 然后再执行 `deepspeed.ops.op_builder.CPUAdamBuilder().load()`
+
+2. 不能同时使用dispactch_model和deepspeed的分布式训练，即要将加载模型时的device_map和max_memory两个参数关闭，否则会导致模型全部加载到一个GPU上。
+3. qlora只能与zero-1配合，否则会因为cpu不能与量化兼容而卡死。
