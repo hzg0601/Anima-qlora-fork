@@ -312,8 +312,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
     sample_generate: bool = field(default=False, metadata={"help": 'If do sample generation on evaluation.'})
     debug_mode: bool = field(default=True, metadata={"help": 'debug mode sample 200 train/eval samples for validation'})
-    # --- path to deepspeed configuration
-    deepspeed: str = field(default="./training/deepspeed_config.json",metadata={"help": "the path to deepspeed config file"})
+    # --- path to deepspeed configuration,"./training/deepspeed_config.json"
+    deepspeed: str = field(default=None,metadata={"help": "the path to deepspeed config file"})
 
 
 @dataclass
